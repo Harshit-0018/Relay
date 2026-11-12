@@ -1,3 +1,92 @@
+# The Relay — Phase 1
+
+Phase 1 implements the paper-library foundation: exact-version downloads, page-aware PDF extraction, chunking, BM25 retrieval, a callable retrieval tool, a small CLI, and an initial evaluation-question dataset.
+
+## Requirements
+
+- Python 3.11 or newer
+- Internet access for the initial arXiv downloads
+- Windows PowerShell instructions are provided below
+
+## Windows PowerShell setup
+
+```powershell
+# Extract the ZIP, then open a PowerShell terminal in the `the-relay` folder.
+py -3.11 -m venv .venv
+.\.venv\Scripts\Activate.ps1
+python -m pip install --upgrade pip
+pip install -r requirements.txt
+```
+
+If PowerShell blocks activation, run this once in the current terminal and activate again:
+
+```powershell
+Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
+.\.venv\Scripts\Activate.ps1
+```
+
+## Download the exact paper versions
+
+```powershell
+python scripts/download_papers.py
+```
+
+The script downloads only the versions pinned in `data/papers/paper_registry.json`, checks that each response is a PDF, and writes SHA-256 values to `data/papers/download_manifest.json`. It makes up to three attempts per file.
+
+Pinned files:
+
+- `1706.03762v7.pdf` — Attention Is All You Need
+- `2410.00037v1.pdf` — Moshi: a speech-text foundation model for real-time dialogue
+- `2507.07955v2.pdf` — Dynamic Chunking for End-to-End Hierarchical Sequence Modeling
+
+## Extract and chunk the papers
+
+```powershell
+python -m app.cli ingest
+```
+
+Optional chunk settings (characters, not tokens):
+
+```powershell
+python -m app.cli ingest --chunk-size 1200 --overlap 180
+```
+
+Outputs:
+
+- `data/processed/pages.jsonl` — page-level extracted text and metadata
+- `data/processed/chunks.jsonl` — retrieval chunks with paper/version/page/section metadata
+- `data/processed/ingestion_manifest.json` — counts and active chunk settings
+
+Citation page numbers are 1-based physical PDF page numbers. Printed page labels are not yet reliably detected.
+
+## Search the library
+
+```powershell
+python -m app.cli search "multi-head attention and positional encoding" --top-k 5
+```
+
+The callable tool interface is available as `app.retrieval.tool.PaperSearchTool`. It returns passages with source metadata and a citation-format hint.
+
+## Tests
+
+```powershell
+python -m pytest
+```
+
+The test suite uses a generated tiny PDF fixture and does not require network access or a Groq API key.
+
+## Current scope
+
+Phase 1 only. Groq calls, FastAPI, generation, verification, simulation, load testing and final report generation are scheduled for later phases.
+
+## Paper version sources
+
+- https://arxiv.org/pdf/1706.03762v7
+- https://arxiv.org/pdf/2410.00037v1
+- https://arxiv.org/pdf/2507.07955v2
+
+
+
 # The Relay Phase 2
 
 The Relay is a multi-step, evidence-grounded question-answering service over the three version-pinned research papers in the assignment. This ZIP cumulatively contains Phase 1 and Phase 2.
