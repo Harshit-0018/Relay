@@ -1,4 +1,176 @@
-# The Relay
+# The Relay Phase 2
+
+The Relay is a multi-step, evidence-grounded question-answering service over the three version-pinned research papers in the assignment. This ZIP cumulatively contains Phase 1 and Phase 2.
+
+## Requirements
+
+- Python 3.11 or newer
+- Internet access only for the first exact-version arXiv downloads and real Groq calls
+- Windows PowerShell instructions below
+
+## Windows PowerShell setup
+
+```powershell
+# Extract the ZIP and open a terminal in the `the-relay` folder.
+py -3.11 -m venv .venv
+.\.venv\Scripts\Activate.ps1
+python -m pip install --upgrade pip
+pip install -r requirements.txt
+Copy-Item .env.example .env
+```
+
+If PowerShell blocks activation:
+
+```powershell
+Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
+.\.venv\Scripts\Activate.ps1
+```
+
+## Download the exact paper versions
+
+```powershell
+python scripts/download_papers.py
+```
+
+The script downloads only the pinned versions in `data/papers/paper_registry.json`, validates the PDF signature, and writes SHA-256 values to `data/papers/download_manifest.json`.
+
+- `1706.03762v7.pdf` — Attention Is All You Need
+- `2410.00037v1.pdf` — Moshi: a speech-text foundation model for real-time dialogue
+- `2507.07955v2.pdf` — Dynamic Chunking for End-to-End Hierarchical Sequence Modeling
+
+## Ingest and index the papers
+
+```powershell
+python -m app.cli ingest
+```
+
+Optional settings are character counts, not token counts:
+
+```powershell
+python -m app.cli ingest --chunk-size 1200 --overlap 180
+```
+
+Outputs:
+
+- `data/processed/pages.jsonl` — extracted page text and metadata
+- `data/processed/chunks.jsonl` — page-bounded retrieval chunks
+- `data/processed/ingestion_manifest.json` — ingestion parameters and counts
+
+Citation page numbers currently use 1-based physical PDF page numbers. Printed page labels are not reliably parsed.
+
+## Run the API in offline demo mode
+
+The default `.env.example` uses `PROVIDER_MODE=demo`. Demo mode does not call an LLM and needs no API key. It verifies that retrieval and citation wiring work; its response is clearly labeled as a retrieval smoke test, not as a substantive model-generated answer.
+
+```powershell
+uvicorn app.main:app --reload --host 127.0.0.1 --port 8000
+```
+
+Check service and paper-index readiness:
+
+```powershell
+Invoke-RestMethod http://127.0.0.1:8000/health
+```
+
+Ask a question:
+
+```powershell
+$body = @{ question = "What does the Transformer rely on?"; top_k = 5 } | ConvertTo-Json
+Invoke-RestMethod -Uri http://127.0.0.1:8000/v1/ask -Method Post -ContentType "application/json" -Body $body
+```
+
+Streaming endpoint (server-sent events):
+
+```powershell
+$body = @{ question = "What does the Transformer rely on?"; top_k = 5 } | ConvertTo-Json
+curl.exe -N -X POST http://127.0.0.1:8000/v1/ask/stream -H "Content-Type: application/json" -d $body
+```
+
+The service generates and validates the whole answer before releasing any text. It then streams the verified text in SSE chunks. This honors the assignment's check-before-send requirement; the first client chunk therefore arrives after generation and citation verification.
+
+API documentation is available at `http://127.0.0.1:8000/docs` while the server is running.
+
+## Enable real Groq generation
+
+Edit `.env`:
+
+```dotenv
+PROVIDER_MODE=groq
+GROQ_API_KEY=your_key_here
+GROQ_MODEL=openai/gpt-oss-20b
+```
+
+Restart the server. Do not commit `.env` or share the key. The provider uses Groq's OpenAI-compatible Chat Completions endpoint and supports both non-streaming completions and upstream SSE generation. The default model ID is configurable; check Groq's current model catalogue before changing it.
+
+If `GROQ_API_KEY` is absent while `PROVIDER_MODE=groq`, startup is not blocked, but the first answering request returns a clear configuration error. Switch to `PROVIDER_MODE=demo` for offline testing.
+
+## Search without the API
+
+```powershell
+python -m app.cli search "multi-head attention and positional encoding" --top-k 5
+```
+
+The callable retrieval tool is `app.retrieval.tool.PaperSearchTool` and is invoked directly by the answer pipeline.
+
+## Tests
+
+```powershell
+python -m pytest -q
+python -m compileall -q app scripts tests
+```
+
+The automated tests use temporary synthetic chunks/PDFs and do not require paper downloads, a Groq key, or external network access.
+
+## Phase 2 pipeline
+
+1. Validate and classify the incoming request through API schema constraints.
+2. Invoke the paper retrieval tool.
+3. Construct a bounded evidence context with exact paper/version/page labels.
+4. Generate through the selected provider (Groq or offline demo).
+5. Validate citation provenance against the exact retrieved citation labels.
+6. If citation validation fails, perform at most one correction attempt by default.
+7. If validation still fails, withhold the draft and return a refusal.
+
+The citation verifier checks that citations match retrieved source references. It does not claim to prove semantic entailment of every generated sentence; answer-quality evaluation is part of the later experiment phase.
+
+## Known Phase 2 limits
+
+- Original arXiv PDFs are not included in this ZIP. Download them locally and run ingestion before asking questions.
+- Demo mode is a plumbing/retrieval check, not an LLM substitute.
+- The API currently uses one process-local BM25 index. Queueing, concurrency policies, retry/backoff and configurable load simulation are Phase 3.
+- Citation validation is provenance validation, not a full semantic fact-checker.
+- For streaming, upstream model tokens are buffered until citation validation completes, then delivered as SSE chunks.
+
+## Project layout
+
+```text
+the-relay/
+├── app/
+│   ├── api.py, api_schemas.py, config.py, main.py, cli.py
+│   ├── providers/       # Groq and offline demo adapters
+│   ├── services/        # pipeline, prompt/context, citation validation
+│   └── retrieval/       # ingestion, chunking, BM25 and tool interface
+├── data/
+│   ├── papers/          # pinned registry; PDFs downloaded locally
+│   ├── processed/       # generated pages/chunks
+│   └── evaluation_questions/
+├── scripts/
+├── tests/
+├── docs/
+├── .env.example
+├── requirements.txt
+└── PROJECT_STATE.md
+```
+
+## Paper version sources
+
+- https://arxiv.org/pdf/1706.03762v7
+- https://arxiv.org/pdf/2410.00037v1
+- https://arxiv.org/pdf/2507.07955v2
+
+
+
+# The Relay Phase 3
 
 The Relay is a multi-step, evidence-grounded question-answering service over the three version-pinned research papers in the assignment. This ZIP cumulatively contains Phases 1, 2 and 3.
 
